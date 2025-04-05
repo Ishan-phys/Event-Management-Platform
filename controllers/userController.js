@@ -6,7 +6,7 @@ const register = async function (req, res) {
     // User Signup
     try {
         if (!req.body.email || !req.body.password || !req.body.name) {
-            return res.status(400).send({body: "Missing Fields"})
+            return res.status(400).send({body: "Missing Fields"});
         }
 
         // Create the user in the db
@@ -15,7 +15,7 @@ const register = async function (req, res) {
             password: req.body.password,
             name: req.body.name,
             roles: req.body.roles
-        })
+        });
         res.status(200).send({body: user});
     } catch (err) {
       console.log(`Error occured in registering the user. Error: ${err}`);
@@ -56,21 +56,18 @@ const login = async function (req, res) {
     }
 };
   
-const getPreferences = async function (req, res) {
-    // Fetch the user preferences
+const getRegisteredEvents = async function (req, res) {
     try {
-        const userEmail = req.user.email;
-
-        if (userEmail) {
-            const user = await User.findOne({email: userEmail});
-            return res.status(200).send({preferences : user.preferences});
-        } else {
-            return res.status(401).send({message: "User Not Found"});
-        }
+      // Fetch a user and populate the registeredEvents array
+      const user = await User.findOne({ _id: req.user._id })
+                            .populate('registeredEvents', 'name description dateFrom dateTo place status -_id');
+      
+      const registeredEvents = user.registeredEvents;
+      res.status(200).json({message: 'Successfully fetched registered events for user', events: registeredEvents });
     } catch (err) {
       console.log(`Error in fetching user preferences: ${err}`);
       res.status(400).send({body: `Error: ${err}`});
     }
-}
+};
 
-module.exports = { register, login, getPreferences };
+module.exports = { register, login, getRegisteredEvents };
