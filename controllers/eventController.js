@@ -1,4 +1,6 @@
 const Event = require("../models/eventModel");
+const NodeCache = require('node-cache');
+const eventsCache = new NodeCache({ stdTTL: 3600 }); // 1 hour TTL
 
 const createEvent = async function (req, res) {
     try {
@@ -25,10 +27,22 @@ const createEvent = async function (req, res) {
 
 const getAllEvents = async function (req, res) {
     try {
-        // Fetch all the events
-        const events = await Event.find()
-                        .populate('organizers', 'name -_id') // Populate the organizer name and remove id
-                        .populate('participants', 'name -_id'); // Populate the participant name and remove id
+        // Check if the events exists in the cache
+        let events = eventsCache.get( "allEvents" );
+
+        if (events) {
+            return res.status(200).json({ events });
+        }
+
+        // Fetch all the events if not in cache
+        events = await Event.find()
+                    .populate('organizers', 'name -_id') // Populate the organizer name and remove id
+                    .populate('participants', 'name -_id'); // Populate the participant name and remove id
+        
+        // Store all the events in the cache
+        const plainEvents = events.map(doc => doc.toObject());
+        eventsCache.set("allEvents", plainEvents);
+        
         res.status(200).json({ events });
     } catch (err) {
         console.log(`Error occured in: . Error e: ${err}`);
@@ -38,16 +52,28 @@ const getAllEvents = async function (req, res) {
 
 const getEvent = async function (req, res) {
     try {
-        // Fetch an event 
         let eventId = req.params.id;
 
-        const event = await Event.findOne({ _id: eventId })
-                                .populate('organizers', 'name -_id') // Populate the organizer name and remove id
-                                .populate('participants', 'name -_id'); // Populate the participant name and remove id
+        // Check if the events exists in the cache
+        let event = eventsCache.get( eventId );
+
+        if (event) {
+            return res.status(200).json({ event });
+        }
+
+        // Fetch the event from the db if doesn't exist in cache
+        event = await Event.findOne({ _id: eventId })
+                .populate('organizers', 'name -_id') // Populate the organizer name and remove id
+                .populate('participants', 'name -_id') // Populate the participant name and remove id
+                .lean(); // Makes it plain JS object — ideal for caching
 
         if (!event) {
             return res.status(401).json({ message: "Requested event doesn't exist" });
         }
+
+        // Set the event in the cache
+        eventsCache.set(eventId, event);
+
         return res.status(200).json({ event });
     } catch (err) {
         console.log(`Error occured in: . Error e: ${err}`);
@@ -57,12 +83,10 @@ const getEvent = async function (req, res) {
 
 const updateEvent = async function (req, res) {
     try {
-        // Update the event (only or organizer role)
         const eventId = req.params.id;
-        const event = await Event.updateOne(
-            { 
-                _id: eventId 
-            },
+
+        const updatedEvent = await Event.findOneAndUpdate(
+            { _id: eventId },
             {
                 name: req.body.name,
                 dateFrom: req.body.dateFrom,
@@ -71,12 +95,27 @@ const updateEvent = async function (req, res) {
                 description: req.body.description,
                 maxParticipants: req.body.maxParticipants,
                 status: req.body.status,
+            },
+            {
+                new: true,          // Return the updated document
+                runValidators: true // Ensure validation rules are enforced
             }
         );
-        res.status(200).json({ message: 'Event updated successfully', event });
+
+        if (!updatedEvent) {
+            return res.status(404).json({ message: 'Event not found' });
+        }
+
+        // Delete the event in the cache
+        eventsCache.del(eventId);
+
+        // Delete the all event cache
+        eventsCache.del("allEvents");
+
+        res.status(200).json({ message: 'Event updated successfully', event: updatedEvent });
     } catch (err) {
-        console.log(`Error occured in: . Error e: ${err}`);
-        return res.status(400).json({ message: 'Something went wrong'});
+        console.error(`Error occurred while updating event: ${err}`);
+        return res.status(400).json({ message: 'Something went wrong' });
     }
 }
 
@@ -119,6 +158,8 @@ const deleteEvent = async function (req, res) {
         const result = await Event.deleteOne({ _id: eventId });
 
         if (result.deletedCount === 1) {
+            eventsCache.del(eventId);
+            eventsCache.del("allEvents");
             return res.status(200).send({ message: 'Document deleted successfully' });
         } else {
             return res.status(404).send({ message: 'Document not found' });
